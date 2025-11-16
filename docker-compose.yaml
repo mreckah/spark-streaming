@@ -1,55 +1,68 @@
-version: "3.8"
-
 services:
-  namenode:
-    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
-    container_name: namenode
-    environment:
-      - CLUSTER_NAME=hadoop
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
-      - HDFS_CONF_dfs_replication=1
-    ports:
-      - "9870:9870"  # HDFS web UI
-      - "8020:8020"  # HDFS port
-    volumes:
-      - ./volumes/namenode:/hadoop/dfs/name
-    networks:
-      - hadoop
-
-  datanode:
-    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
-    container_name: datanode
-    environment:
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
-      - HDFS_CONF_dfs_replication=1
-    volumes:
-      - ./volumes/datanode:/hadoop/dfs/data
-    depends_on:
-      - namenode
-    networks:
-      - hadoop
-
   spark-master:
     image: apache/spark:3.5.1
     container_name: spark-master
-    environment:
-      - SPARK_MODE=master
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master"]
+    hostname: spark-master
+    command: bash -c "/opt/spark/sbin/start-master.sh && tail -f /dev/null"
     ports:
-      - "8080:8080"
       - "7077:7077"
+      - "8080:8080"
+      - "4040:4040"
+    volumes:
+      - ./spark-hdfs-streaming/structured-streaming-app/data/input:/data/input
+      - ./spark-hdfs-streaming/structured-streaming-app/target:/app
+      - ./spark-hdfs-streaming/structured-streaming-app/libs:/libs
+      - ./spark-hdfs-streaming/structured-streaming-app/checkpoint:/tmp/checkpoint
     networks:
-      - hadoop
+      - spark-net
 
   spark-worker:
     image: apache/spark:3.5.1
     container_name: spark-worker
     depends_on:
       - spark-master
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+    command: bash -c "/opt/spark/sbin/start-worker.sh spark://spark-master:7077 && tail -f /dev/null"
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./spark-hdfs-streaming/structured-streaming-app/structured/data/input:/data/input
+      - ./spark-hdfs-streaming/structured-streaming-app/target:/app
+      - ./spark-hdfs-streaming/structured-streaming-app/libs:/libs
+      - ./spark-hdfs-streaming/structured-streaming-app/checkpoint:/tmp/checkpoint
     networks:
-      - hadoop
+      - spark-net
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mydb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - spark-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - postgres
+    networks:
+      - spark-net
 
 networks:
-  hadoop:
+  spark-net:
     driver: bridge
